@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -17,6 +18,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/watch"
+
+	_ "github.com/lib/pq"
 )
 
 // PodInfo contains pod info
@@ -34,7 +37,9 @@ type OOMEvent struct {
 
 var uidIndex map[types.UID]PodInfo
 var pidRegExp *regexp.Regexp
+var cgroupRegExp *regexp.Regexp
 var webhookURL string
+var db *sql.DB
 
 func main() {
 	masterURL := flag.String("master", "", "kubernetes api server url")
@@ -61,9 +66,20 @@ func main() {
 		log.Fatalln(err)
 	}
 
+	db, err = sql.Open("postgres", *dbURL)
+	if err != nil {
+		log.Fatalln(err)
+	}
+	defer db.Close()
+
 	uidIndex = make(map[types.UID]PodInfo, 1000)
 
 	pidRegExp, err = regexp.Compile("Kill\\s+process\\s+(\\d+)")
+	if err != nil {
+		log.Fatalln(err)
+	}
+
+	cgroupRegExp, err = regexp.Compile("/pod([\\w\\-]+)/")
 	if err != nil {
 		log.Fatalln(err)
 	}
@@ -77,6 +93,9 @@ func main() {
 		var err error
 		if oomEvent.Error == nil {
 			err = handleOOM(oomEvent)
+			if err != nil {
+				err = handleError(err)
+			}
 		} else {
 			err = handleError(oomEvent.Error)
 		}
@@ -165,10 +184,50 @@ func extractPID(message string) (uint64, error) {
 	return pid, nil
 }
 
+func extractUID(cgroup string) (types.UID, error) {
+	match := cgroupRegExp.FindStringSubmatch(cgroup)
+	if match == nil {
+		return "", fmt.Errorf("Unknown cgroup format: %s", cgroup)
+	}
+
+	return types.UID(match[1]), nil
+}
+
 func handleOOM(event OOMEvent) error {
+	var cgroup string
+
+	err := db.QueryRow(
+		`SELECT cgroup
+		FROM records
+		WHERE
+			hostname = $1 AND
+			pid = $2 AND
+			ts < current_timestamp
+		ORDER BY ts DESC
+		LIMIT 1`,
+		event.Node, event.PID).Scan(&cgroup)
+
+	if err == sql.ErrNoRows {
+		return fmt.Errorf("No ps record for node %s and PID %d", event.Node, event.PID)
+	}
+
+	if err != nil {
+		return err
+	}
+
+	uid, err := extractUID(cgroup)
+	if err != nil {
+		return err
+	}
+
+	pod, ok := uidIndex[uid]
+	if !ok {
+		return fmt.Errorf("Pod with UID %s is not known", uid)
+	}
+
 	return postMessage(map[string]string{
 		"username": "OOM watcher",
-		"text":     fmt.Sprintf("Node: %s, PID: %d", event.Node, event.PID),
+		"text":     fmt.Sprintf("OOM in pod %s/%s (node: %s, PID: %d)", pod.Namespace, pod.Name, event.Node, event.PID),
 	})
 }
 

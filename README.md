@@ -17,5 +17,12 @@ Watches Kubernetes API server for OOMKilling events and sends pod name and names
 ## Usage
 
 ```
-TODO
+  -db-url string
+    	database URL
+  -kubeconfig string
+    	path to kubeconfig file
+  -master string
+    	kubernetes api server url
+  -webhook-url string
+    	webhook URL
 ```
