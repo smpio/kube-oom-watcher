@@ -11,8 +11,6 @@ import (
 	"regexp"
 	"strconv"
 
-	"k8s.io/client-go/rest"
-
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
@@ -44,7 +42,6 @@ var webhookURL string
 var db *sql.DB
 
 func main() {
-	inCluster := flag.Bool("in-cluster", false, "running in cluster")
 	masterURL := flag.String("master", "", "kubernetes api server url")
 	kubeconfigPath := flag.String("kubeconfig", "", "path to kubeconfig file")
 	dbURL := flag.String("db-url", "", "database URL")
@@ -59,14 +56,7 @@ func main() {
 		log.Fatalln("Webhook URL not set")
 	}
 
-	var config *rest.Config
-	var err error
-
-	if *inCluster {
-		config, err = rest.InClusterConfig()
-	} else {
-		config, err = clientcmd.BuildConfigFromFlags(*masterURL, *kubeconfigPath)
-	}
+	config, err := clientcmd.BuildConfigFromFlags(*masterURL, *kubeconfigPath)
 	if err != nil {
 		log.Fatalln(err)
 	}
