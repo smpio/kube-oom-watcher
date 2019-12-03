@@ -39,13 +39,12 @@ type OOMEvent struct {
 
 var (
 	minWatchTimeout = 5 * time.Minute
+	uidIndex        map[types.UID]PodInfo
+	pidRegExp       *regexp.Regexp
+	cgroupRegExp    *regexp.Regexp
+	webhookURL      string
+	db              *sql.DB
 )
-
-var uidIndex map[types.UID]PodInfo
-var pidRegExp *regexp.Regexp
-var cgroupRegExp *regexp.Regexp
-var webhookURL string
-var db *sql.DB
 
 func main() {
 	masterURL := flag.String("master", "", "kubernetes api server url")
