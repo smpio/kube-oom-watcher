@@ -17,6 +17,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 
+	apierrs "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/watch"
@@ -137,6 +138,11 @@ func podIndexer(clientset *kubernetes.Clientset) {
 		}
 
 		for watchEvent := range watcher.ResultChan() {
+			if watchEvent.Type == watch.Error {
+				err := apierrs.FromObject(watchEvent.Object)
+				log.Fatalln(err)
+			}
+
 			pod, ok := watchEvent.Object.(*v1.Pod)
 			if !ok {
 				log.Println("unexpected type:", watchEvent.Object.GetObjectKind().GroupVersionKind())
@@ -176,6 +182,11 @@ func eventWatcher(clientset *kubernetes.Clientset, c chan OOMEvent) {
 		}
 
 		for watchEvent := range watcher.ResultChan() {
+			if watchEvent.Type == watch.Error {
+				err := apierrs.FromObject(watchEvent.Object)
+				log.Fatalln(err)
+			}
+
 			event, ok := watchEvent.Object.(*v1.Event)
 			if !ok {
 				log.Println("unexpected type:", watchEvent.Object.GetObjectKind().GroupVersionKind())
