@@ -7,9 +7,11 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math/rand"
 	"net/http"
 	"regexp"
 	"strconv"
+	"time"
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
@@ -34,6 +36,10 @@ type OOMEvent struct {
 	PID   uint64
 	Error error
 }
+
+var (
+	minWatchTimeout = 5 * time.Minute
+)
 
 var uidIndex map[types.UID]PodInfo
 var pidRegExp *regexp.Regexp
@@ -107,65 +113,102 @@ func main() {
 }
 
 func podIndexer(clientset *kubernetes.Clientset) {
-	watcher, err := clientset.CoreV1().Pods("").Watch(metav1.ListOptions{})
+	list, err := clientset.CoreV1().Pods("").List(metav1.ListOptions{})
 	if err != nil {
 		log.Fatalln(err)
 	}
 
-	for watchEvent := range watcher.ResultChan() {
-		pod, ok := watchEvent.Object.(*v1.Pod)
-		if !ok {
-			log.Println("unexpected type:", watchEvent.Object.GetObjectKind().GroupVersionKind())
-			continue
+	for _, pod := range list.Items {
+		uidIndex[pod.UID] = PodInfo{
+			Name:      pod.Name,
+			Namespace: pod.Namespace,
+		}
+	}
+
+	resourceVersion := list.ResourceVersion
+
+	for {
+		timeoutSeconds := int64(minWatchTimeout.Seconds() * (rand.Float64() + 1.0))
+		watcher, err := clientset.CoreV1().Pods("").Watch(metav1.ListOptions{
+			ResourceVersion: resourceVersion,
+			TimeoutSeconds:  &timeoutSeconds,
+		})
+		if err != nil {
+			log.Fatalln(err)
 		}
 
-		if watchEvent.Type == watch.Added {
-			uidIndex[pod.UID] = PodInfo{
-				Name:      pod.Name,
-				Namespace: pod.Namespace,
+		for watchEvent := range watcher.ResultChan() {
+			pod, ok := watchEvent.Object.(*v1.Pod)
+			if !ok {
+				log.Println("unexpected type:", watchEvent.Object.GetObjectKind().GroupVersionKind())
+				continue
 			}
-		} else if watchEvent.Type == watch.Deleted {
-			delete(uidIndex, pod.UID)
+
+			resourceVersion = pod.ResourceVersion
+
+			if watchEvent.Type == watch.Added {
+				uidIndex[pod.UID] = PodInfo{
+					Name:      pod.Name,
+					Namespace: pod.Namespace,
+				}
+			} else if watchEvent.Type == watch.Deleted {
+				delete(uidIndex, pod.UID)
+			}
 		}
 	}
 }
 
 func eventWatcher(clientset *kubernetes.Clientset, c chan OOMEvent) {
-	watcher, err := clientset.CoreV1().Events("").Watch(metav1.ListOptions{})
+	list, err := clientset.CoreV1().Events("").List(metav1.ListOptions{})
 	if err != nil {
 		log.Fatalln(err)
 	}
 
-	for watchEvent := range watcher.ResultChan() {
-		if watchEvent.Type != watch.Added {
-			continue
-		}
+	resourceVersion := list.ResourceVersion
 
-		event, ok := watchEvent.Object.(*v1.Event)
-		if !ok {
-			log.Println("unexpected type:", watchEvent.Object.GetObjectKind().GroupVersionKind())
-			continue
-		}
-
-		if event.Reason != "OOMKilling" {
-			continue
-		}
-
-		if event.InvolvedObject.Kind != "Node" {
-			continue
-		}
-
-		node := event.InvolvedObject.Name
-		pid, err := extractPID(event.Message)
+	for {
+		timeoutSeconds := int64(minWatchTimeout.Seconds() * (rand.Float64() + 1.0))
+		watcher, err := clientset.CoreV1().Events("").Watch(metav1.ListOptions{
+			ResourceVersion: resourceVersion,
+			TimeoutSeconds:  &timeoutSeconds,
+		})
 		if err != nil {
-			c <- OOMEvent{
-				Error: err,
-			}
+			log.Fatalln(err)
 		}
 
-		c <- OOMEvent{
-			Node: node,
-			PID:  pid,
+		for watchEvent := range watcher.ResultChan() {
+			event, ok := watchEvent.Object.(*v1.Event)
+			if !ok {
+				log.Println("unexpected type:", watchEvent.Object.GetObjectKind().GroupVersionKind())
+				continue
+			}
+
+			resourceVersion = event.ResourceVersion
+
+			if watchEvent.Type != watch.Added {
+				continue
+			}
+
+			if event.Reason != "OOMKilling" {
+				continue
+			}
+
+			if event.InvolvedObject.Kind != "Node" {
+				continue
+			}
+
+			node := event.InvolvedObject.Name
+			pid, err := extractPID(event.Message)
+			if err != nil {
+				c <- OOMEvent{
+					Error: err,
+				}
+			}
+
+			c <- OOMEvent{
+				Node: node,
+				PID:  pid,
+			}
 		}
 	}
 }
