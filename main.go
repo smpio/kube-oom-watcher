@@ -128,6 +128,8 @@ func podIndexer(clientset *kubernetes.Clientset) {
 	resourceVersion := list.ResourceVersion
 
 	for {
+		log.Println("podIndexer: watching since", resourceVersion)
+
 		timeoutSeconds := int64(minWatchTimeout.Seconds() * (rand.Float64() + 1.0))
 		watcher, err := clientset.CoreV1().Pods("").Watch(metav1.ListOptions{
 			ResourceVersion: resourceVersion,
@@ -145,7 +147,7 @@ func podIndexer(clientset *kubernetes.Clientset) {
 
 			pod, ok := watchEvent.Object.(*v1.Pod)
 			if !ok {
-				log.Println("unexpected type:", watchEvent.Object.GetObjectKind().GroupVersionKind())
+				log.Println("podIndexer: unexpected kind:", watchEvent.Object.GetObjectKind().GroupVersionKind())
 				continue
 			}
 
@@ -172,6 +174,8 @@ func eventWatcher(clientset *kubernetes.Clientset, c chan OOMEvent) {
 	resourceVersion := list.ResourceVersion
 
 	for {
+		log.Println("eventWatcher: watching since", resourceVersion)
+
 		timeoutSeconds := int64(minWatchTimeout.Seconds() * (rand.Float64() + 1.0))
 		watcher, err := clientset.CoreV1().Events("").Watch(metav1.ListOptions{
 			ResourceVersion: resourceVersion,
@@ -189,7 +193,7 @@ func eventWatcher(clientset *kubernetes.Clientset, c chan OOMEvent) {
 
 			event, ok := watchEvent.Object.(*v1.Event)
 			if !ok {
-				log.Println("unexpected type:", watchEvent.Object.GetObjectKind().GroupVersionKind())
+				log.Println("eventWatcher: unexpected kind:", watchEvent.Object.GetObjectKind().GroupVersionKind())
 				continue
 			}
 
