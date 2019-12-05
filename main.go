@@ -40,7 +40,7 @@ type OOMEvent struct {
 
 var (
 	minWatchTimeout = 5 * time.Minute
-	uidIndex        map[types.UID]PodInfo
+	uidIndex        *map[types.UID]PodInfo
 	pidRegExp       *regexp.Regexp
 	cgroupRegExp    *regexp.Regexp
 	webhookURL      string
@@ -78,8 +78,6 @@ func main() {
 	}
 	defer db.Close()
 
-	uidIndex = make(map[types.UID]PodInfo, 1000)
-
 	pidRegExp, err = regexp.Compile("Kill\\s+process\\s+(\\d+)")
 	if err != nil {
 		log.Fatalln(err)
@@ -113,19 +111,36 @@ func main() {
 }
 
 func podIndexer(clientset *kubernetes.Clientset) {
+	for {
+		err := internalPodIndexer(clientset)
+		if statusErr, ok := err.(*apierrs.StatusError); ok {
+			if statusErr.ErrStatus.Reason == metav1.StatusReasonExpired {
+				log.Println("podIndexer:", err, "Restarting watch")
+				continue
+			}
+		}
+
+		log.Fatalln(err)
+	}
+}
+
+func internalPodIndexer(clientset *kubernetes.Clientset) error {
 	list, err := clientset.CoreV1().Pods("").List(metav1.ListOptions{})
 	if err != nil {
 		log.Fatalln(err)
 	}
 
+	index := make(map[types.UID]PodInfo, 1000)
+
 	for _, pod := range list.Items {
-		uidIndex[pod.UID] = PodInfo{
+		index[pod.UID] = PodInfo{
 			Name:      pod.Name,
 			Namespace: pod.Namespace,
 		}
 	}
 
 	resourceVersion := list.ResourceVersion
+	uidIndex = &index
 
 	for {
 		log.Println("podIndexer: watching since", resourceVersion)
@@ -136,13 +151,12 @@ func podIndexer(clientset *kubernetes.Clientset) {
 			TimeoutSeconds:  &timeoutSeconds,
 		})
 		if err != nil {
-			log.Fatalln(err)
+			return err
 		}
 
 		for watchEvent := range watcher.ResultChan() {
 			if watchEvent.Type == watch.Error {
-				err := apierrs.FromObject(watchEvent.Object)
-				log.Fatalln(err)
+				return apierrs.FromObject(watchEvent.Object)
 			}
 
 			pod, ok := watchEvent.Object.(*v1.Pod)
@@ -154,21 +168,35 @@ func podIndexer(clientset *kubernetes.Clientset) {
 			resourceVersion = pod.ResourceVersion
 
 			if watchEvent.Type == watch.Added {
-				uidIndex[pod.UID] = PodInfo{
+				index[pod.UID] = PodInfo{
 					Name:      pod.Name,
 					Namespace: pod.Namespace,
 				}
 			} else if watchEvent.Type == watch.Deleted {
-				delete(uidIndex, pod.UID)
+				delete(index, pod.UID)
 			}
 		}
 	}
 }
 
 func eventWatcher(clientset *kubernetes.Clientset, c chan OOMEvent) {
+	for {
+		err := internalEventWatcher(clientset, c)
+		if statusErr, ok := err.(*apierrs.StatusError); ok {
+			if statusErr.ErrStatus.Reason == metav1.StatusReasonExpired {
+				log.Println("eventWatcher:", err, "Restarting watch")
+				continue
+			}
+		}
+
+		log.Fatalln(err)
+	}
+}
+
+func internalEventWatcher(clientset *kubernetes.Clientset, c chan OOMEvent) error {
 	list, err := clientset.CoreV1().Events("").List(metav1.ListOptions{})
 	if err != nil {
-		log.Fatalln(err)
+		return err
 	}
 
 	resourceVersion := list.ResourceVersion
@@ -182,13 +210,12 @@ func eventWatcher(clientset *kubernetes.Clientset, c chan OOMEvent) {
 			TimeoutSeconds:  &timeoutSeconds,
 		})
 		if err != nil {
-			log.Fatalln(err)
+			return err
 		}
 
 		for watchEvent := range watcher.ResultChan() {
 			if watchEvent.Type == watch.Error {
-				err := apierrs.FromObject(watchEvent.Object)
-				log.Fatalln(err)
+				return apierrs.FromObject(watchEvent.Object)
 			}
 
 			event, ok := watchEvent.Object.(*v1.Event)
@@ -277,7 +304,11 @@ func handleOOM(event OOMEvent) error {
 		return err
 	}
 
-	pod, ok := uidIndex[uid]
+	if uidIndex == nil {
+		return fmt.Errorf("UID index not ready")
+	}
+
+	pod, ok := (*uidIndex)[uid]
 	if !ok {
 		return fmt.Errorf("Pod with UID %s is not known", uid)
 	}
