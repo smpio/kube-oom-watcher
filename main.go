@@ -279,9 +279,10 @@ func extractUID(cgroup string) (types.UID, error) {
 
 func handleOOM(event OOMEvent) error {
 	var cgroup string
+	var nspid uint64
 
 	err := db.QueryRow(
-		`SELECT cgroup
+		`SELECT cgroup, nspid
 		FROM records
 		WHERE
 			hostname = $1 AND
@@ -289,7 +290,7 @@ func handleOOM(event OOMEvent) error {
 			ts < current_timestamp
 		ORDER BY ts DESC
 		LIMIT 1`,
-		event.Node, event.PID).Scan(&cgroup)
+		event.Node, event.PID).Scan(&cgroup, &nspid)
 
 	if err == sql.ErrNoRows {
 		return fmt.Errorf("No ps record for node %s and PID %d", event.Node, event.PID)
@@ -315,7 +316,7 @@ func handleOOM(event OOMEvent) error {
 
 	return postMessage(map[string]string{
 		"username": "OOM watcher",
-		"text":     fmt.Sprintf("OOM in pod %s/%s (node: %s, PID: %d)", pod.Namespace, pod.Name, event.Node, event.PID),
+		"text":     fmt.Sprintf("OOM in pod %s/%s (node: %s, PID: %d, NSPID: %d)", pod.Namespace, pod.Name, event.Node, event.PID, nspid),
 	})
 }
 
