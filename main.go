@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"flag"
@@ -125,7 +126,7 @@ func podIndexer(clientset *kubernetes.Clientset) {
 }
 
 func internalPodIndexer(clientset *kubernetes.Clientset) error {
-	list, err := clientset.CoreV1().Pods("").List(metav1.ListOptions{})
+	list, err := clientset.CoreV1().Pods("").List(context.TODO(), metav1.ListOptions{})
 	if err != nil {
 		log.Fatalln(err)
 	}
@@ -146,7 +147,7 @@ func internalPodIndexer(clientset *kubernetes.Clientset) error {
 		log.Println("podIndexer: watching since", resourceVersion)
 
 		timeoutSeconds := int64(minWatchTimeout.Seconds() * (rand.Float64() + 1.0))
-		watcher, err := clientset.CoreV1().Pods("").Watch(metav1.ListOptions{
+		watcher, err := clientset.CoreV1().Pods("").Watch(context.TODO(), metav1.ListOptions{
 			ResourceVersion: resourceVersion,
 			TimeoutSeconds:  &timeoutSeconds,
 		})
@@ -194,7 +195,7 @@ func eventWatcher(clientset *kubernetes.Clientset, c chan OOMEvent) {
 }
 
 func internalEventWatcher(clientset *kubernetes.Clientset, c chan OOMEvent) error {
-	list, err := clientset.CoreV1().Events("").List(metav1.ListOptions{})
+	list, err := clientset.CoreV1().Events("").List(context.TODO(), metav1.ListOptions{})
 	if err != nil {
 		return err
 	}
@@ -205,7 +206,7 @@ func internalEventWatcher(clientset *kubernetes.Clientset, c chan OOMEvent) erro
 		log.Println("eventWatcher: watching since", resourceVersion)
 
 		timeoutSeconds := int64(minWatchTimeout.Seconds() * (rand.Float64() + 1.0))
-		watcher, err := clientset.CoreV1().Events("").Watch(metav1.ListOptions{
+		watcher, err := clientset.CoreV1().Events("").Watch(context.TODO(), metav1.ListOptions{
 			ResourceVersion: resourceVersion,
 			TimeoutSeconds:  &timeoutSeconds,
 		})
